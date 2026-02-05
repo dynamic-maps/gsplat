@@ -211,6 +211,10 @@ class Parser:
         image_id_to_name = {v: k for k, v in manager.name_to_image_id.items()}
         for point_id, data in manager.point3D_id_to_images.items():
             for image_id, _ in data:
+                # Skip invalid image IDs
+                # This can happen with externally imported point clouds
+                if image_id not in image_id_to_name:
+                    continue
                 image_name = image_id_to_name[image_id]
                 point_idx = manager.point3D_id_to_point3D_idx[point_id]
                 point_indices.setdefault(image_name, []).append(point_idx)
