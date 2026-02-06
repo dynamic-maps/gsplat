@@ -261,6 +261,19 @@ class Parser:
         self.params_dict = params_dict  # Dict of camera_id -> params
         self.imsize_dict = imsize_dict  # Dict of camera_id -> (width, height)
         self.mask_dict = mask_dict  # Dict of camera_id -> mask
+        
+        # Load masks from masks directory if it exists
+        self.mask_paths = {}  # Dict of image_name -> mask_path
+        mask_dir = os.path.join(data_dir, "masks")
+        if os.path.exists(mask_dir):
+            mask_files = _get_rel_paths(mask_dir)
+            for mask_file in mask_files:
+                mask_path = os.path.join(mask_dir, mask_file)
+                # Match mask to image by filename (without extension)
+                mask_name = os.path.splitext(os.path.basename(mask_file))[0]
+                self.mask_paths[mask_name] = mask_path
+            if len(self.mask_paths) > 0:
+                print(f"[Parser] Found {len(self.mask_paths)} mask files in {mask_dir}")
         self.points = points  # np.ndarray, (num_points, 3)
         self.points_err = points_err  # np.ndarray, (num_points,)
         self.points_rgb = points_rgb  # np.ndarray, (num_points, 3)
@@ -420,6 +433,25 @@ class Dataset:
         params = self.parser.params_dict[camera_id]
         camtoworlds = self.parser.camtoworlds[index]
         mask = self.parser.mask_dict[camera_id]
+        
+        # Load mask from masks directory if available
+        image_name = self.parser.image_names[index]
+        image_name_base = os.path.splitext(image_name)[0]
+        if image_name_base in self.parser.mask_paths:
+            mask_path = self.parser.mask_paths[image_name_base]
+            loaded_mask = imageio.imread(mask_path)
+            # Convert to binary mask (handle both grayscale and RGB)
+            if loaded_mask.ndim == 3:
+                loaded_mask = loaded_mask[..., 0]
+            loaded_mask = loaded_mask > 0
+            
+            # Resize mask to match image size if needed
+            if self.parser.factor > 1:
+                h, w = image.shape[:2]
+                loaded_mask = np.array(
+                    Image.fromarray(loaded_mask).resize((w, h), Image.NEAREST)
+                )
+            mask = loaded_mask
 
         if len(params) > 0:
             # Images are distorted. Undistort them.
@@ -430,6 +462,9 @@ class Dataset:
             image = cv2.remap(image, mapx, mapy, cv2.INTER_LINEAR)
             x, y, w, h = self.parser.roi_undist_dict[camera_id]
             image = image[y : y + h, x : x + w]
+            if mask is not None:
+                mask = cv2.remap(mask.astype(np.uint8), mapx, mapy, cv2.INTER_NEAREST).astype(bool)
+                mask = mask[y : y + h, x : x + w]
 
         if self.patch_size is not None:
             # Random crop.
@@ -439,6 +474,8 @@ class Dataset:
             image = image[y : y + self.patch_size, x : x + self.patch_size]
             K[0, 2] -= x
             K[1, 2] -= y
+            if mask is not None:
+                mask = mask[y : y + self.patch_size, x : x + self.patch_size]
 
         data = {
             "K": torch.from_numpy(K).float(),
